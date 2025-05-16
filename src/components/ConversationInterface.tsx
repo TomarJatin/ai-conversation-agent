@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Avatar } from '@/components/ui/avatar';
-import { Mic, Send, Loader2 } from 'lucide-react';
+import { Mic, Send, Loader2, MicOff, Volume2 } from 'lucide-react';
 
 const ConversationInterface: React.FC = () => {
   const {
@@ -37,6 +37,18 @@ const ConversationInterface: React.FC = () => {
     }
   };
 
+  // Determine the current state for display
+  const getStatusMessage = () => {
+    if (isProcessing) return "Processing...";
+    if (isSpeaking) return "Speaking...";
+    if (isListening) {
+      return userSpeaking ? "Listening (active)" : "Listening...";
+    }
+    return null;
+  };
+
+  const statusMessage = getStatusMessage();
+
   return (
     <div className="flex flex-col h-[80vh]">
       {/* Conversation Status */}
@@ -50,20 +62,22 @@ const ConversationInterface: React.FC = () => {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {isListening && (
-            <span className="text-sm text-green-400 flex items-center gap-1">
-              <span
-                className={`inline-block w-2 h-2 rounded-full ${
-                  userSpeaking ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
-                }`}
-              />
-              Listening
-            </span>
-          )}
-          {isSpeaking && (
-            <span className="text-sm text-blue-400 flex items-center gap-1">
-              <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-              Speaking
+          {statusMessage && (
+            <span className={`text-sm flex items-center gap-1 ${
+              isProcessing ? 'text-yellow-400' : 
+              isSpeaking ? 'text-blue-400' : 
+              userSpeaking ? 'text-green-500' : 'text-green-400'
+            }`}>
+              {isProcessing && <Loader2 className="h-3 w-3 animate-spin" />}
+              {isSpeaking && <Volume2 className="h-3 w-3 animate-pulse" />}
+              {isListening && !isProcessing && !isSpeaking && (
+                <span
+                  className={`inline-block w-2 h-2 rounded-full ${
+                    userSpeaking ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
+                  }`}
+                />
+              )}
+              {statusMessage}
             </span>
           )}
         </div>
@@ -134,7 +148,7 @@ const ConversationInterface: React.FC = () => {
       {/* Controls */}
       <div className="flex flex-col gap-4">
         <div className="flex justify-center">
-          {!isListening ? (
+          {!isListening && !isProcessing && !isSpeaking ? (
             <Button
               onClick={startConversation}
               disabled={isProcessing}
@@ -167,18 +181,34 @@ const ConversationInterface: React.FC = () => {
             onChange={(e) => setTextInput(e.target.value)}
             placeholder="Type a message..."
             className="flex-1 rounded-lg bg-gray-700 border-gray-600 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={isProcessing || isSpeaking}
           />
-          <Button type="submit" disabled={!textInput.trim()} size="icon">
+          <Button 
+            type="submit" 
+            disabled={!textInput.trim() || isProcessing || isSpeaking} 
+            size="icon"
+          >
             <Send className="h-4 w-4" />
           </Button>
-          {isListening && (
+          {(isListening || isProcessing || isSpeaking) && (
             <Button
               type="button"
               size="icon"
-              variant={userSpeaking ? "default" : "outline"}
-              className={userSpeaking ? "bg-green-600 hover:bg-green-700" : ""}
+              variant="outline"
+              disabled={true}
+              className={`${
+                isListening && userSpeaking ? "bg-green-600" : 
+                isSpeaking ? "bg-blue-600" : 
+                isProcessing ? "bg-yellow-600" : ""
+              }`}
             >
-              <Mic className={`h-4 w-4 ${userSpeaking ? 'animate-pulse' : ''}`} />
+              {isListening ? (
+                <Mic className={`h-4 w-4 ${userSpeaking ? 'animate-pulse' : ''}`} />
+              ) : isSpeaking ? (
+                <Volume2 className="h-4 w-4 animate-pulse" />
+              ) : (
+                <MicOff className="h-4 w-4" />
+              )}
             </Button>
           )}
         </form>

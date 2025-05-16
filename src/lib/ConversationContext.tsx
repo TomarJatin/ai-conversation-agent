@@ -38,6 +38,7 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [isProcessing, setIsProcessing] = useState(false);
   const [userSpeaking, setUserSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conversationActive, setConversationActive] = useState(false);
 
   const clientRef = useRef<ConversationClient | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
@@ -74,6 +75,8 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (!audioPlayerRef.current) return;
 
       try {
+        // Pause listening while speaking
+        pauseListening();
         setIsSpeaking(true);
         
         // Fetch the audio from the URL
@@ -88,18 +91,30 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         // Play the audio
         await audioPlayerRef.current.playAudio(audioBlob, () => {
           setIsSpeaking(false);
+          // Resume listening after speaking if conversation is still active
+          if (conversationActive) {
+            resumeListening();
+          }
         });
       } catch (error) {
         console.error('Error playing audio:', error);
         setIsSpeaking(false);
+        // Resume listening after error if conversation is still active
+        if (conversationActive) {
+          resumeListening();
+        }
       }
     });
 
     client.onError((errorMsg) => {
       setError(errorMsg);
       setIsProcessing(false);
+      // Resume listening after error if conversation is still active
+      if (conversationActive) {
+        resumeListening();
+      }
     });
-  }, []);
+  }, [conversationActive]);
 
   const addMessage = (role: 'user' | 'assistant', content: string) => {
     setMessages((prevMessages) => [
@@ -113,10 +128,23 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     ]);
   };
 
-  const startConversation = async () => {
+  const pauseListening = () => {
+    if (speechDetectorRef.current) {
+      speechDetectorRef.current.stop();
+    }
+    
+    if (audioRecorderRef.current && audioRecorderRef.current.isCurrentlyRecording()) {
+      audioRecorderRef.current.stopRecording();
+    }
+    
+    setUserSpeaking(false);
+    setIsListening(false);
+  };
+
+  const resumeListening = async () => {
+    if (!conversationActive) return;
+    
     try {
-      setError(null);
-      
       // Initialize speech detector
       if (!speechDetectorRef.current) {
         speechDetectorRef.current = new SpeechDetector();
@@ -143,11 +171,18 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           const audioBlob = await audioRecorderRef.current.stopRecording();
           
           if (audioBlob && clientRef.current) {
+            // Pause listening during processing
+            pauseListening();
+            
             // Send audio to server
             setIsProcessing(true);
             const success = await clientRef.current.sendAudioChunk(audioBlob);
             if (!success) {
               setError('Failed to process audio');
+              // Resume listening after error if conversation is still active
+              if (conversationActive) {
+                resumeListening();
+              }
             }
             setIsProcessing(false);
           }
@@ -161,9 +196,22 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       
       setIsListening(true);
     } catch (error) {
+      console.error('Error resuming listening:', error);
+      setError('Failed to resume listening');
+    }
+  };
+
+  const startConversation = async () => {
+    try {
+      setError(null);
+      setConversationActive(true);
+      
+      await resumeListening();
+    } catch (error) {
       console.error('Error starting conversation:', error);
       setError('Failed to start conversation');
       setIsListening(false);
+      setConversationActive(false);
     }
   };
 
@@ -187,12 +235,17 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setIsSpeaking(false);
     setUserSpeaking(false);
     setIsProcessing(false);
+    setConversationActive(false);
   };
 
   const sendMessage = (text: string) => {
     if (!text.trim()) return;
     
     addMessage('user', text);
+    
+    // Pause listening while processing text message
+    pauseListening();
+    setIsProcessing(true);
     
     // Send message to server via REST API
     fetch('/api/chat', {
@@ -211,17 +264,13 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     })
       .then((response) => response.json())
       .then((data) => {
+        setIsProcessing(false);
+        
         if (data.message) {
           addMessage('assistant', data.message.content);
           
-          // Convert response to speech
-          fetch('/api/text-to-speech', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ text: data.message.content }),
-          })
+          // Convert response to speech using the socket/audio API
+          fetch(`/api/socket/audio?text=${encodeURIComponent(data.message.content)}`)
             .then((response) => response.arrayBuffer())
             .then((audioBuffer) => {
               if (audioPlayerRef.current) {
@@ -229,17 +278,30 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
                 audioPlayerRef.current.playAudio(audioBlob, () => {
                   setIsSpeaking(false);
+                  // Resume listening after speaking if conversation is still active
+                  if (conversationActive) {
+                    resumeListening();
+                  }
                 });
               }
             })
             .catch((error) => {
               console.error('Error converting text to speech:', error);
+              // Resume listening after error if conversation is still active
+              if (conversationActive) {
+                resumeListening();
+              }
             });
         }
       })
       .catch((error) => {
         console.error('Error sending message:', error);
         setError('Failed to send message');
+        setIsProcessing(false);
+        // Resume listening after error if conversation is still active
+        if (conversationActive) {
+          resumeListening();
+        }
       });
   };
 
