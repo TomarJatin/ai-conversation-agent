@@ -6,15 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Avatar } from '@/components/ui/avatar';
-import { Mic, MicOff, Send, Loader2 } from 'lucide-react';
+import { Mic, Send, Loader2 } from 'lucide-react';
 
 const ConversationInterface: React.FC = () => {
   const {
     messages,
     isListening,
     isSpeaking,
-    isConnecting,
-    isConnected,
+    isProcessing,
     startConversation,
     stopConversation,
     sendMessage,
@@ -43,18 +42,12 @@ const ConversationInterface: React.FC = () => {
       {/* Conversation Status */}
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div
-            className={`w-3 h-3 rounded-full ${
-              isConnected ? 'bg-green-500' : isConnecting ? 'bg-yellow-500' : 'bg-red-500'
-            }`}
-          />
-          <span className="text-sm">
-            {isConnecting
-              ? 'Connecting...'
-              : isConnected
-              ? 'Connected'
-              : 'Disconnected'}
-          </span>
+          {isProcessing && (
+            <span className="text-sm text-yellow-400 flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Processing...
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {isListening && (
@@ -89,9 +82,9 @@ const ConversationInterface: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-4">
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <div
-                key={message.id}
+                key={index}
                 className={`flex ${
                   message.role === 'user' ? 'justify-end' : 'justify-start'
                 }`}
@@ -144,13 +137,13 @@ const ConversationInterface: React.FC = () => {
           {!isListening ? (
             <Button
               onClick={startConversation}
-              disabled={isConnecting}
+              disabled={isProcessing}
               className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-6"
             >
-              {isConnecting ? (
+              {isProcessing ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Connecting...
+                  Processing...
                 </>
               ) : (
                 <>Start Conversation</>
@@ -185,7 +178,7 @@ const ConversationInterface: React.FC = () => {
               variant={userSpeaking ? "default" : "outline"}
               className={userSpeaking ? "bg-green-600 hover:bg-green-700" : ""}
             >
-              {userSpeaking ? <Mic className="h-4 w-4 animate-pulse" /> : <Mic className="h-4 w-4" />}
+              <Mic className={`h-4 w-4 ${userSpeaking ? 'animate-pulse' : ''}`} />
             </Button>
           )}
         </form>

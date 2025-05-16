@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { AudioRecorder, SpeechDetector, AudioPlayer } from './audioUtils';
-import { ConversationSocketClient } from './socketClient';
+import { ConversationClient } from './socketClient';
 
 type Message = {
   id: string;
@@ -13,8 +13,7 @@ type ConversationContextType = {
   messages: Message[];
   isListening: boolean;
   isSpeaking: boolean;
-  isConnecting: boolean;
-  isConnected: boolean;
+  isProcessing: boolean;
   startConversation: () => Promise<void>;
   stopConversation: () => void;
   sendMessage: (text: string) => void;
@@ -36,19 +35,18 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [userSpeaking, setUserSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const socketClientRef = useRef<ConversationSocketClient | null>(null);
+  const clientRef = useRef<ConversationClient | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
   const speechDetectorRef = useRef<SpeechDetector | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
 
   // Initialize utilities
   useEffect(() => {
-    socketClientRef.current = new ConversationSocketClient();
+    clientRef.current = new ConversationClient();
     audioRecorderRef.current = new AudioRecorder();
     speechDetectorRef.current = new SpeechDetector();
     audioPlayerRef.current = new AudioPlayer();
@@ -58,42 +56,48 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     };
   }, []);
 
-  // Set up socket event handlers
+  // Set up client event handlers
   useEffect(() => {
-    if (!socketClientRef.current) return;
+    if (!clientRef.current) return;
 
-    const socketClient = socketClientRef.current;
+    const client = clientRef.current;
 
-    socketClient.onConnect(() => {
-      setIsConnected(true);
-      setIsConnecting(false);
-    });
-
-    socketClient.onDisconnect(() => {
-      setIsConnected(false);
-    });
-
-    socketClient.onTranscription((text) => {
+    client.onTranscription((text) => {
       addMessage('user', text);
     });
 
-    socketClient.onTextResponse((text) => {
+    client.onTextResponse((text) => {
       addMessage('assistant', text);
     });
 
-    socketClient.onAudioResponse(async (audioBuffer) => {
+    client.onAudioResponse(async (audioUrl) => {
       if (!audioPlayerRef.current) return;
 
-      setIsSpeaking(true);
-      
-      const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
-      await audioPlayerRef.current.playAudio(audioBlob, () => {
+      try {
+        setIsSpeaking(true);
+        
+        // Fetch the audio from the URL
+        const response = await fetch(audioUrl);
+        if (!response.ok) {
+          throw new Error('Failed to fetch audio');
+        }
+        
+        const audioBuffer = await response.arrayBuffer();
+        const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+        
+        // Play the audio
+        await audioPlayerRef.current.playAudio(audioBlob, () => {
+          setIsSpeaking(false);
+        });
+      } catch (error) {
+        console.error('Error playing audio:', error);
         setIsSpeaking(false);
-      });
+      }
     });
 
-    socketClient.onError((errorMsg) => {
+    client.onError((errorMsg) => {
       setError(errorMsg);
+      setIsProcessing(false);
     });
   }, []);
 
@@ -112,19 +116,6 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const startConversation = async () => {
     try {
       setError(null);
-      setIsConnecting(true);
-      
-      // Connect to WebSocket server
-      if (!socketClientRef.current) {
-        socketClientRef.current = new ConversationSocketClient();
-      }
-      
-      const connected = await socketClientRef.current.connect();
-      if (!connected) {
-        setError('Failed to connect to the conversation server');
-        setIsConnecting(false);
-        return;
-      }
       
       // Initialize speech detector
       if (!speechDetectorRef.current) {
@@ -151,16 +142,20 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           // Stop recording and get audio blob
           const audioBlob = await audioRecorderRef.current.stopRecording();
           
-          if (audioBlob && socketClientRef.current) {
+          if (audioBlob && clientRef.current) {
             // Send audio to server
-            socketClientRef.current.sendAudioChunk(audioBlob);
+            setIsProcessing(true);
+            const success = await clientRef.current.sendAudioChunk(audioBlob);
+            if (!success) {
+              setError('Failed to process audio');
+            }
+            setIsProcessing(false);
           }
         }
       );
       
       if (!speechDetectorInitialized) {
         setError('Failed to initialize speech detection');
-        setIsConnecting(false);
         return;
       }
       
@@ -168,7 +163,6 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } catch (error) {
       console.error('Error starting conversation:', error);
       setError('Failed to start conversation');
-      setIsConnecting(false);
       setIsListening(false);
     }
   };
@@ -189,15 +183,10 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       audioPlayerRef.current.stop();
     }
     
-    // Disconnect socket
-    if (socketClientRef.current) {
-      socketClientRef.current.disconnect();
-    }
-    
     setIsListening(false);
     setIsSpeaking(false);
     setUserSpeaking(false);
-    setIsConnected(false);
+    setIsProcessing(false);
   };
 
   const sendMessage = (text: string) => {
@@ -205,7 +194,7 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     
     addMessage('user', text);
     
-    // Send message to server via REST API since we're not using voice
+    // Send message to server via REST API
     fetch('/api/chat', {
       method: 'POST',
       headers: {
@@ -258,8 +247,7 @@ export const ConversationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     messages,
     isListening,
     isSpeaking,
-    isConnecting,
-    isConnected,
+    isProcessing,
     startConversation,
     stopConversation,
     sendMessage,
